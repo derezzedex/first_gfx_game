@@ -12,7 +12,9 @@ use cgmath::{Deg, Matrix4, Point3, Vector3};
 use cgmath::EuclideanSpace;
 use gfx_window_glutin as gfx_glutin;
 use gfx::Factory;
-
+use std::time::Duration;
+use std::thread::sleep;
+//ok
 pub type ColorFormat = gfx::format::Rgba8;
 pub type DepthFormat = gfx::format::DepthStencil;
 
@@ -31,7 +33,7 @@ gfx_defines!{
 		transform: gfx::Global<[[f32; 4]; 4]> = "u_Transform",
 		locals: gfx::ConstantBuffer<Locals> = "Locals",
 		color: gfx::TextureSampler<[f32; 4]> = "t_Color",
-		out_color: gfx::RenderTarget<ColorFormat> = "Target0",
+		out_color: gfx::BlendTarget<ColorFormat> = ("Target0", gfx::state::MASK_ALL, gfx::preset::blend::ALPHA),
 		out_depth: gfx::DepthTarget<DepthFormat> = gfx::preset::depth::LESS_EQUAL_WRITE,
 	}
 
@@ -108,6 +110,12 @@ fn deal_with_mouse(py: (f32, f32), last: (f32, f32), x: i32, y: i32, fmouse: boo
 
 }
 
+fn move_to(matrix_from: Matrix4<f32>, direction: Vector3<f32>) -> Matrix4<f32>{
+	let matrix_to_move = Matrix4::from_translation(direction);
+
+	matrix_from * matrix_to_move
+}
+
 const INDEX: &[u16] = &[
 	0,  1,  2,  2,  3,  0, // top
     4,  5,  6,  6,  7,  4, // bottom
@@ -151,7 +159,7 @@ fn main(){
 		Vertex::new([ 1, -1, -1], [0, 1]),
 	];
 
-	let mut game_title = "First GFX game!".to_string();
+	let mut game_title = "FGG Test";
 
 	let events_loop = glutin::EventsLoop::new();
 	let builder = glutin::WindowBuilder::new()
@@ -174,15 +182,32 @@ fn main(){
 		texture::FilterMethod::Bilinear,
 		texture::WrapMode::Clamp);
 
+	let program = factory.link_program(
+		include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/cube_150.glslv")),
+		include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/cube_150.glslf"))
+	).unwrap();
 
+	let mut rasterizer = gfx::state::Rasterizer::new_fill().with_cull_back();
+	//rasterizer.front_face = gfx::state::FrontFace::Clockwise;
+
+	let pso = factory.create_pipeline_from_program(
+		&program,
+		gfx::Primitive::TriangleList, // primitive topology
+    	rasterizer, // Backface culling
+    	pipe::new()
+	).unwrap();
+	
+	/*
 	let pso = factory.create_pipeline_simple(
 		include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/cube_150.glslv")),
 		include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/shaders/cube_150.glslf")),
 		pipe::new()
 	).unwrap();
-
+	*/
 	let mut cameraPos = Vector3::new(0.0f32, 0.0, 3.0);
 	let mut cameraFront = Vector3::new(0.0f32, 0.0, -1.0);
+
+	let mut model_position = Matrix4::from_translation(Vector3::new(0.0f32, 0.0, 0.0));
 
 	let pressed = glutin::ElementState::Pressed;
 	let released = glutin::ElementState::Released;
@@ -203,6 +228,7 @@ fn main(){
 	let mut currentFrame = time::PreciseTime::now();
 
 	let mut firstMouse = true;
+	let mut do_test = false;
 
 	let mut pitch = 0.0f32;
 	let mut yaw = -90.0f32;
@@ -215,6 +241,7 @@ fn main(){
 	window.set_cursor(glutin::MouseCursor::NoneCursor);
 
 	let mut rec = false;
+	let mut frames = 0u32;
 	let mut running = true;
 	while running{
 		let mut currentFrame = currentFrame.to(time::PreciseTime::now());
@@ -222,17 +249,19 @@ fn main(){
 		dT = duration_dT.num_milliseconds() as f32;
 		lastFrame = currentFrame;
 
-		let camera_speed = 10f32 * (dT/1000.0); // dt in seconds
+		let camera_speed = 100f32 * (dT/1000.0); // dt in seconds
+		let mut new_game_title = game_title.to_owned()+" | dt: "+ &dT.to_string();
+		window.set_title(&new_game_title);
 		events_loop.poll_events(|glutin::Event::WindowEvent{window_id: _, event}| {
 			use glutin::WindowEvent::*;
 			match event{
 				KeyboardInput(_, _, Some(glutin::VirtualKeyCode::Escape), _)
 				| Closed => running = false,
-				KeyboardInput(_, pressed, Some(glutin::VirtualKeyCode::W), _) => {rec = true;cameraPos+=camera_speed*cameraFront;},
-				KeyboardInput(_, pressed, Some(glutin::VirtualKeyCode::S), _) => {rec = true;cameraPos-=camera_speed*cameraFront;},
+				KeyboardInput(_, pressed, Some(glutin::VirtualKeyCode::W), _) => {rec = true;cameraPos+=(camera_speed)*cameraFront;},
+				KeyboardInput(_, pressed, Some(glutin::VirtualKeyCode::S), _) => {rec = true;cameraPos-=(camera_speed)*cameraFront;},
 				KeyboardInput(_, pressed, Some(glutin::VirtualKeyCode::A), _) => {rec = true;cameraPos-=normalize(cameraFront.cross(Vector3::new(0.0f32, 1.0, 0.0)))*camera_speed},
 				KeyboardInput(_, pressed, Some(glutin::VirtualKeyCode::D), _) => {rec = true;cameraPos+=normalize(cameraFront.cross(Vector3::new(0.0f32, 1.0, 0.0)))*camera_speed},
-				//KeyboardInput(_, pressed, Some(glutin::VirtualKeyCode::E), _) => {window.set_cursor_state(glutin::CursorState::Normal);},
+				//KeyboardInput(_, pressed, Some(glutin::VirtualKeyCode::E), _) => {if do_test{do_test=false;}else{do_test=true;}},
 				//KeyboardInput(_, pressed, Some(glutin::VirtualKeyCode::LShift), _) => {},
 				MouseMoved(a, b) =>{
 					/*
@@ -278,7 +307,7 @@ fn main(){
 					gfx_glutin::update_views(&window, &mut data.out_color, &mut data.out_depth);
 					data.transform = (proj * view(cameraPos, cameraPos + cameraFront)).into();
 				},
-				_=> (),
+				_=> {},
 			}
 
 		});
@@ -288,18 +317,32 @@ fn main(){
 		let aspect_ratio: f32 = width as f32/height as f32;
 		let proj = cgmath::perspective(Deg(45.0f32), aspect_ratio, 0.1, 100.0);
 		gfx_glutin::update_views(&window, &mut data.out_color, &mut data.out_depth);
+		
 		data.transform = (proj * view(cameraPos, cameraPos + cameraFront)).into();
-
 		let locals = Locals { transform: data.transform};
 		encoder.update_constant_buffer(&data.locals, &locals);
 		encoder.clear(&data.out_color, [0.156863, 0.156863, 0.156863, 1.0]);
 		encoder.clear_depth(&data.out_depth, 1.0);
+		encoder.draw(&slice, &pso, &data);
+
+		let model = move_to(model_position, Vector3::new(2.0f32, 0.0, 0.0));
+		let pv = (proj * view(cameraPos, cameraPos + cameraFront));
+		println!("cp: {:?} cf: {:?} cpf: {:?}", cameraPos, cameraFront, cameraPos+cameraFront);
+		data.transform = (pv * model).into();
+		let locals = Locals { transform: data.transform};
+		encoder.update_constant_buffer(&data.locals, &locals);
 
 		//render & update
 		encoder.draw(&slice, &pso, &data);
 		encoder.flush(&mut device);
 		window.swap_buffers().unwrap();
 		device.cleanup();
+		//frames+=1;
+		/*
+		if dT < 1000f32/30f32{
+			sleep(Duration::from_millis((1000f32/30f32 - dT) as u64));
+		}
+		*/
 	}
 
 }
